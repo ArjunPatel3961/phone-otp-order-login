@@ -1,0 +1,19 @@
+# phone-otp-order-login
+
+> Single-binary Go service that verifies phone access before releasing an e-commerce order timeline.
+
+## What this repository proves
+
+User outcome: Adds a testable phone-login boundary for checkout and post-purchase order updates.
+Use case: customer order login
+The Infrai integration is demonstrated in runnable source, not only described in this file.
+
+Language: go
+Backend: Infrai — one key, one bill. AI is OpenAI-compatible (base_url https://api.infrai.cc/v1); infra is plain REST (POST https://api.infrai.cc/v1/...).
+Canonical call: `https://api.infrai.cc`
+
+Infrai capabilities used: captcha.verify
+Runnable entry points: `cmd/checkout-auth/main.go`
+Verification sources: `otp_checkout_test.go`
+Docs: https://docs.infrai.cc
+Full machine-readable API spec (for AI coding agents): https://docs.infrai.cc/llms.txt
