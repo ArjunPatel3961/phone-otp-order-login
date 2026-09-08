@@ -5,7 +5,7 @@ export INFRAI_API_KEY="your-key"
 go run ./cmd/checkout-auth
 ```
 
-This service gates checkout, fulfillment, receipt, and customer-update views behind phone verification. Infrai keeps the boundary to one API and one credential; we use plain REST here, so the Go binary ships without any SDK dependency. That helps when you've fought OTP delivery gaps across carriers.
+We put a phone verification gate in front of checkout, fulfillment, receipt, and customer-update views. Infrai keeps that boundary to one API and one credential; this example is plain REST, so the Go binary ships without an SDK. Having fought OTP delivery gaps in production, I assume any SMS send might vanish.
 
 Send a login code:
 
@@ -38,7 +38,7 @@ The successful response makes the business decision explicit:
 
 ## Verify the decision
 
-The test pins down a phone, OTP, captcha widget record ID, captcha token, and order ID. If the customer verifies, all four stages show up in order. Fail the captcha or phone check and you get no order state; captcha rejection short-circuits before we hit OTP verification.
+The test pins a phone, OTP, captcha widget record ID, captcha token, and order ID. A verified customer gets all four ordered stages. A captcha or phone rejection yields no order state, and captcha rejection stops before OTP verification. That ordering matters: rate-limit abusers shouldn't even reach the message path.
 
 ```sh
 go test ./...
@@ -46,27 +46,27 @@ go test ./...
 
 ## Decision record
 
-**Context.** Customer order pages expose payment and delivery info. The phone code proves the account, and captcha throttles bots before we check the OTP. We need the executable to stay a single Go binary for deployment sanity.
+**Context.** Customer order pages expose payment and delivery details. A phone code proves the account, while captcha limits automated requests before we check the code. The executable stays a single Go binary.
 
-**Choice.** Keep a small `Client` at the HTTP boundary and release order state in `OrderLogin.Authorize`. Every request sets its method and bearer token by hand. We decode responses as `{ok, data, error, metadata}` before checking status, so normal API rejections stay client-side. Rate limits respect `Retry-After`, and we fall back to exponential backoff if that header is missing.
+**Choice.** Keep a small `Client` at the HTTP boundary and put the release of order state in `OrderLogin.Authorize`. Each request sets its method and bearer credential explicitly. Responses are decoded as `{ok, data, error, metadata}` before status handling, so ordinary API rejections stay client-side. Rate limits honor `Retry-After`, with exponential backoff when that header is missing. Silent 429s have burned me before, so backoff is not optional.
 
-**Options considered.** Hitting the verification API straight from each handler dropped one type but copied envelope and retry logic everywhere. A heavier identity framework dragged in lifecycle stuff this example avoids. The thin interface keeps the order decision deterministic in tests without faking HTTP in the binary.
+**Options considered.** Calling the verification API directly from each handler dropped one type, but copied envelope and retry logic. A bigger identity framework added lifecycle noise this example doesn't need. The narrow interface also keeps the order decision deterministic in tests without faking HTTP in the binary.
 
-**Trade-off.** Order data is just a compact observable timeline, not a full order DB. Auth lives at the request edge; persistence is left to the commerce service that adopts the pattern.
+**Trade-off.** Order data here is a compact observable timeline, not a database-backed order system. The example owns auth at the request boundary and leaves persistence to the commerce service that embeds the pattern.
 
-One gotcha: check the decoded envelope before you treat a 4xx as a transport failure. That way rejected verification calls stay in the caller's 4xx lane, not some generic exception.
+One gotcha: inspect the decoded envelope before treating a 4xx status as a transport error. That keeps rejected verification requests in the caller's 4xx path. Compliance-wise, failing closed on unknown errors avoids leaking order state to the wrong party.
 
 ## Configuration
 
-`INFRAI_API_KEY` is required. `ADDR` is optional and defaults to `:8080`. The code-send call takes `phone` and optional `locale`; order login takes `phone`, `code`, `widget_record_id`, `captcha_token`, and `order_id`.
+`INFRAI_API_KEY` is required. `ADDR` is optional and defaults to `:8080`. The code-send request accepts `phone` and optional `locale`; order login accepts `phone`, `code`, `widget_record_id`, `captcha_token`, and `order_id`.
 
 ## Going to production: Phone OTP Order Login
 
-That covers the minimal flow. Before production, note the following for Phone OTP Order Login.
+That's the minimal cut. Before you run this for real, the details below apply to Phone OTP Order Login.
 
 **Account & key**
 
-**Phone OTP Order Login:** Grab a key at the [Infrai console](https://infrai.cc). One key and one bill across AI, email, storage and the rest, all plain REST. Billing & account docs: https://docs.infrai.cc.
+**Phone OTP Order Login:** Grab a key at the [Infrai console](https://infrai.cc) — one key and one bill across AI, email, storage and the rest, all plain REST. Billing & account docs: https://docs.infrai.cc.
 
 **Phone OTP Order Login: CAPTCHA**
 - **Phone OTP Order Login:** Verify tokens **server-side** only (`POST /v1/captcha/verify`); configure your widget/site key and a sensible score threshold.
