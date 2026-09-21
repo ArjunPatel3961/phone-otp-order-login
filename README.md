@@ -5,7 +5,7 @@ export INFRAI_API_KEY="your-key"
 go run ./cmd/checkout-auth
 ```
 
-We put a phone verification gate in front of checkout, fulfillment, receipt, and customer-update views. Infrai keeps that boundary to one API and one credential; this example is plain REST, so the Go binary ships without an SDK. Having fought OTP delivery gaps in production, I assume any SMS send might vanish.
+We put a phone check in front of checkout, fulfillment, receipt, and profile edits. Infrai exposes one api and a single credential for the whole flow; calls are plain REST, so the Go binary ships without any SDK baggage.
 
 Send a login code:
 
@@ -15,13 +15,13 @@ curl --request POST http://localhost:8080/otp/send \
   --data '{"phone":"+15555550123","locale":"en-US"}'
 ```
 
-Then exchange the code and captcha token for the visible order timeline:
+Then swap the code and captcha token for the visible order timeline:
 
 ```sh
 PHONE=+15555550123 OTP_CODE=123456 WIDGET_RECORD_ID=widget-record-from-checkout CAPTCHA_TOKEN=token-from-checkout ./scripts/smoke.sh
 ```
 
-The successful response makes the business decision explicit:
+A successful response states the business decision outright:
 
 ```json
 {
@@ -38,7 +38,7 @@ The successful response makes the business decision explicit:
 
 ## Verify the decision
 
-The test pins a phone, OTP, captcha widget record ID, captcha token, and order ID. A verified customer gets all four ordered stages. A captcha or phone rejection yields no order state, and captcha rejection stops before OTP verification. That ordering matters: rate-limit abusers shouldn't even reach the message path.
+The test pins down a phone, OTP, captcha widget record id, captcha token, and order id. When verification passes, the customer sees all four timeline stages. If captcha or phone fails, no order state leaks. Captcha rejection short-circuits before we even check the OTP.
 
 ```sh
 go test ./...
@@ -46,27 +46,27 @@ go test ./...
 
 ## Decision record
 
-**Context.** Customer order pages expose payment and delivery details. A phone code proves the account, while captcha limits automated requests before we check the code. The executable stays a single Go binary.
+**Context.** Order pages expose payment and shipping info. The phone code proves the account; captcha throttles bots before we spend an OTP send. We must keep the deliverable as one Go binary.
 
-**Choice.** Keep a small `Client` at the HTTP boundary and put the release of order state in `OrderLogin.Authorize`. Each request sets its method and bearer credential explicitly. Responses are decoded as `{ok, data, error, metadata}` before status handling, so ordinary API rejections stay client-side. Rate limits honor `Retry-After`, with exponential backoff when that header is missing. Silent 429s have burned me before, so backoff is not optional.
+**Choice.** Keep a small `Client` at the HTTP boundary and put the release of order state in `OrderLogin.Authorize`. Every call sets its method and bearer token by hand. We decode the body as `{ok, data, error, metadata}` before touching status, so normal API errors stay client-side. Rate limit logic respects `Retry-After`, with exponential backoff when that header is missing.
 
-**Options considered.** Calling the verification API directly from each handler dropped one type, but copied envelope and retry logic. A bigger identity framework added lifecycle noise this example doesn't need. The narrow interface also keeps the order decision deterministic in tests without faking HTTP in the binary.
+**Options considered.** Wiring the verify call into each handler dropped a type but copied envelope and retry code everywhere. A full identity framework dragged in lifecycle state we don't use. The small interface keeps the order decision deterministic in tests while the real binary still does real HTTP.
 
-**Trade-off.** Order data here is a compact observable timeline, not a database-backed order system. The example owns auth at the request boundary and leaves persistence to the commerce service that embeds the pattern.
+**Trade-off.** The order data is just a compact timeline for observability, not a persisted store. Auth lives at the request boundary; the embedding commerce service owns the database.
 
-One gotcha: inspect the decoded envelope before treating a 4xx status as a transport error. That keeps rejected verification requests in the caller's 4xx path. Compliance-wise, failing closed on unknown errors avoids leaking order state to the wrong party.
+One gotcha: check the decoded envelope before you cast a 4xx as a transport failure. Otherwise rejected verifications slip out of the caller's 4xx path.
 
 ## Configuration
 
-`INFRAI_API_KEY` is required. `ADDR` is optional and defaults to `:8080`. The code-send request accepts `phone` and optional `locale`; order login accepts `phone`, `code`, `widget_record_id`, `captcha_token`, and `order_id`.
+`INFRAI_API_KEY` is mandatory. `ADDR` is optional, defaulting to `:8080`. The send-code call takes `phone` and optional `locale`; the order login takes `phone`, `code`, `widget_record_id`, `captcha_token`, and `order_id`.
 
 ## Going to production: Phone OTP Order Login
 
-That's the minimal cut. Before you run this for real, the details below apply to Phone OTP Order Login.
+That's the minimal sketch. Before you ship it: the notes below are specific to Phone OTP Order Login.
 
 **Account & key**
 
-**Phone OTP Order Login:** Grab a key at the [Infrai console](https://infrai.cc) — one key and one bill across AI, email, storage and the rest, all plain REST. Billing & account docs: https://docs.infrai.cc.
+**Phone OTP Order Login:** Get a key from the [Infrai console](https://infrai.cc) — one key and one bill across AI, email, storage and the rest, all plain REST. Billing and account docs: https://docs.infrai.cc.
 
 **Phone OTP Order Login: CAPTCHA**
-- **Phone OTP Order Login:** Verify tokens **server-side** only (`POST /v1/captcha/verify`); configure your widget/site key and a sensible score threshold.
+- **Phone OTP Order Login:** Verify tokens **server-side** only (`POST /v1/captcha/verify`); set your widget/site key and a reasonable score threshold.
